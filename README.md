@@ -46,12 +46,13 @@ To install Poetry, follow the instructions either using [pipx](https://python-po
 Navigate to the local folder where you want to clone the repo;
 
 Run: ```bash git clone https://github.com/claramont/mental-navigation.git ```
+
 Navigate to the local project repository del progetto:
 ```bash
 cd mental-navigation
 ```
 
-### 4. Creare l'ambiente e installare le dipendenze
+### 4. Create the virtualenv and install dependencies
 In the terminal (we used Visual Studio Code, but any IDE works as well), run:
 ```bash
 poetry install
@@ -76,4 +77,5 @@ poetry shell
   ```
 - Select the desired interpreter using Visual Studio Code.
   Then, every built-in terminal will be open inside the venv, without the need to run ```poetry shell```
+
 
