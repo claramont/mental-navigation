@@ -1,6 +1,6 @@
 # Mental Navigation
 
-Python project by Clara Montemurro and Francesca Dessalvi to reproduce the figures of the paper [Mental navigation in the primate entorhinal cortex](https://www.nature.com/articles/s41586-024-07557-z#Sec22), by Neupane e co.
+Python project by Clara Montemurro and Francesca Dessalvi to reproduce the figures of the paper [Mental navigation in the primate entorhinal cortex](https://www.nature.com/articles/s41586-024-07557-z#), by Neupane e co.
 The code is organized with `src/` and the environment is handled through [Poetry](https://python-poetry.org/) to manage dependencies.
 
 
