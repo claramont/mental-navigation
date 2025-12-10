@@ -168,7 +168,7 @@ class LMGCPlasticityModel:
                 self.time_points.append(t)
                 self.activity_history['s'].append(current_run["s"])
                 self.activity_history['s_int'].append(current_run["s_int"])
-                self.activity_history['s_int'].append(current_run["s_ext"])
+                self.activity_history['s_ext'].append(current_run["s_ext"])
 
 
 
