@@ -1,6 +1,6 @@
-from src.mental_navigation.CAN.model_units import ECModule, LandmarkUnit
+from .model_units import ECModule, LandmarkUnit
 import numpy as np
-import os
+import pandas as pd
 
 class LMGCPlasticityModel:
     """
@@ -18,7 +18,6 @@ class LMGCPlasticityModel:
         self,
         list_modules : list[ECModule],
         landmark: LandmarkUnit,
-        lm_module_index: int,
         eta: float,
         t_off: int,
         weight_init_std: float | None=None,
@@ -31,8 +30,6 @@ class LMGCPlasticityModel:
             the EC modules (length M)
         - landmark
             LM external pattern object
-        - lm_module_index
-            index of the module whose frequency matches LM
         - eta
             learning rate in Oja's rule
         - t_off
@@ -48,7 +45,7 @@ class LMGCPlasticityModel:
         assert len(list_modules) > 0 #need at least one module in the model
         self.modules = list_modules
         self.landmark = landmark
-        self.lm_module_index = lm_module_index
+        self.lm_module_index = landmark.lm_module_index
         self.eta = eta
         self.t_off = t_off
 
@@ -69,6 +66,7 @@ class LMGCPlasticityModel:
         self.weight_history = []
         self.learning_flags = []
         self.time_points = []
+        self.activity_history = {'s':[], 's_int':[], 's_ext':[]}
 
 
     """
@@ -87,7 +85,6 @@ class LMGCPlasticityModel:
     then mean-center each column (per-module mean subtraction)
     """
 
-
     def get_initial_weights(self):
         return self.W_init
 
@@ -105,17 +102,15 @@ class LMGCPlasticityModel:
         phases_track = np.zeros(self.M, dtype=int)
         for i, module in enumerate(self.modules):
             phases_track[i] = module.phase_index(t)
-            X[:, i] = module.activity(t)
+            X[:, i] = module.activity(t) #shape: (K,)
         return X, phases_track
 
-    def LM_total_input(self, s_int:float, s_ext:float|None, t:int):
+    def LM_total_activity(self, s_int:float, s_ext:float|None, t:int):
         if t < self.t_off:
             s = s_int + s_ext
-            flg_ext_input = 1
+            return s, 1
         else:
-            s = s_int
-            flg_ext_input = 0
-        return s, flg_ext_input
+            return s_int, 0
 
 
     def step(self, t:int) -> dict:
@@ -140,10 +135,10 @@ class LMGCPlasticityModel:
         phi_lm = phases_track[self.lm_module_index]
         s_ext = self.landmark.external_input(phi_lm)
 
-        # 4) LM activity received
-        s, learning_flag = self.LM_total_input(s_int, s_ext, t)
+        # 4) LM activity received (either s_int + s_ext or only s_int)
+        s, lm_visible_flag = self.LM_total_activity(s_int, s_ext, t)
         
-        # 5) Oja update
+        # 5) Oja weight update
         self.W = self.Oja_update(self.W, X, s, self.eta)
 
         # 6) mean subtraction per column
@@ -155,10 +150,10 @@ class LMGCPlasticityModel:
             "s_int": s_int,
             "s_ext": s_ext,
             "s": s,
-            "learning_flag": learning_flag
+            "learning_flag": lm_visible_flag
         }
 
-    def train(self, T:int, snapshot_interval:int, store_hist:bool = True):
+    def run(self, T:int, snapshot_interval:int, store_hist:bool = True):
         """
         Run the simulation for T time steps
         Save a snapshot of the current state of the weights once every 'snapshot' steps
@@ -171,6 +166,10 @@ class LMGCPlasticityModel:
                 self.weight_history.append(self.W.copy())
                 self.learning_flags.append(current_run["learning_flag"])
                 self.time_points.append(t)
+                self.activity_history['s'].append(current_run["s"])
+                self.activity_history['s_int'].append(current_run["s_int"])
+                self.activity_history['s_int'].append(current_run["s_ext"])
+
 
 
     def get_final_weights(self)-> np.ndarray:
@@ -179,8 +178,11 @@ class LMGCPlasticityModel:
 
     def get_history(self)-> dict:
         return {
+            "time_step": np.array(self.time_points),
             "weights": np.array(self.weight_history),
-            "learning_flags": np.array(self.learning_flags),
-            "time_points": np.array(self.time_points)
+            "NTS_flg": np.array(self.learning_flags),
+            "total_activity": np.array(self.activity_history['s']),
+            "int_input": np.array(self.activity_history['s_int']),
+            "ext_input": np.array(self.activity_history['s_ext'])
             }
 

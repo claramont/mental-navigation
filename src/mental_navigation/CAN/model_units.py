@@ -101,7 +101,7 @@ class LandmarkUnit(PhaseRingUnit):
     - time dependence comes only when we sample lm_ext at phase phi_star of the LM-matched module
     """
 
-    def __init__(self, K:int, base_width:float, lm_phases_deg:float , amp:float = 1.0):
+    def __init__(self, K:int, base_width:float, lm_phases_deg:float, lm_module_index, amp:float = 1.0):
         """
         Parameters:
         -----------
@@ -115,6 +115,7 @@ class LandmarkUnit(PhaseRingUnit):
         """
         super().__init__(K=K, base_width = base_width)
         self.lm_phases_deg = np.atleast_1d(lm_phases_deg).astype(float)
+        self.lm_module_index = lm_module_index
 
         self.base_bump = self.create_bump(width_scale = 1.0, amp = amp)
         self.lm_ext = self.build_lm_ext() # shape (K,)
