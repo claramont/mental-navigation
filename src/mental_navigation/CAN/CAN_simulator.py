@@ -165,7 +165,7 @@ class CANSimulator:
         """
         net = self.network
         if landmark_input is None:
-            landmark_input = 0.0
+            landmark_input = np.zeros(self.network.K)
         G_L = v_L * (g_LL + g_LR + net.FF_global) + landmark_input
         G_R = v_R * (g_RL + g_RR + net.FF_global) + landmark_input
         return np.concatenate([G_L, G_R])
@@ -211,7 +211,7 @@ class CANSimulator:
         - landmark_onset_steps : int
             Temporal offset (in time steps) for the landmark amplitude peak.
         - landmark_tau_steps : int
-            Temporal standard deviation of the landmark amplitude envelope.
+            Temporal standard deviation (in time steps) of the landmark amplitude envelope.
         """
 
         net = self.network
@@ -222,7 +222,7 @@ class CANSimulator:
         s = np.zeros((2*K, max_steps))
         s[:, 0] = init_condition.copy()
 
-        # track phase on ring where the bump center is
+        # initialize network state: now only phase on ring where the bump center starts
         nn_state = [initial_phase]
 
         # velocity input
@@ -234,53 +234,33 @@ class CANSimulator:
         # landmark locations
         lm_locs = np.array(landmark_input_loc, dtype= float) # shape (L,)
         L = lm_locs.shape[0]
-        lm_flag = 0
-        lm_times = np.full(L, np.nan)
+
+        # initialize lm_entry times as an array of null values
+        lm_entry_times = np.full(L, np.nan) # entry times for each landmark
+        
 
 
         t=0
         while nn_state[-1] < end_phase and t < max_steps -1:
             t += 1
 
-            # do similar procedure as seen in init trial
+            # Network dynamics
             prev = s[:, t-1]
             s_L = prev[:K]
             s_R = prev[K:]
             v_L, v_R = self.velocity_bias(v[t])
             g_RR, g_LL, g_RL, g_LR = self.synaptic_inp_contrib(s_L, s_R)
 
-            # cases:
-            # Case 1. We are in / near a landmark region
-            if lm_flag:
-                phase = nn_state[-1]
-
-                # 1a. not passed through first landmark yet
-                if phase < lm_locs[0]:
-                    landmark = np.zeros(K)
-                
-                # 1b. first landmark already passed. which lm region are we in?
-                else:
-                    k = np.searchsorted(lm_locs, phase, side="right") - 1   #we are at k-th landmark
-                    k = max(0, min(k, L-1))
-                
-                    # record time t_k if we just entered the region of lm k
-                    if lm_flag < k + 1:
-                        lm_flag = k+1
-                        lm_times[k] = t
-                t_k = lm_times[k]
-
-                # construct landmark input
-                amp = 50.0 * np.exp(-(t - t_k - landmark_onset_steps) ** 2/ (2.0 * landmark_tau_steps**2))
-
-                # Centers of the internal landmark bump (slightly shifted)
-                centers = lm_locs + 3.0
-
-                landmark = self.generate_landmark_input(
-                    centers=centers,
-                    std=5.0,
-                    ampl_scaling=amp,
-                    normalize_single=False,
-                )
+            # internal landmark trigger (if present)
+            if landmarkpresent:
+                current_phase = nn_state[-1]
+                landmark, lm_entry_times = self.create_landmark_trigger(t,
+                                                                        current_phase,
+                                                                        lm_locs,
+                                                                        lm_entry_times,
+                                                                        landmark_onset_steps,
+                                                                        landmark_tau_steps
+                                                                        )
 
             else:
                 landmark = np.zeros(K)
@@ -301,4 +281,88 @@ class CANSimulator:
             # tracking bump center:
 
 
+
+    def create_landmark_trigger(
+            self,
+            t:int,
+            phase: float,
+            lm_locs:np.array,
+            lm_entry_times:np.array,
+            landmark_onset_steps: int,
+            landmark_tau_steps: int
+            )-> Tuple[np.array, np.array]:
+        
+        """
+        If a landmark should be active at a certain time, generate its input profile.
+
+        Logic behind:
+        -------------
+        - Landmarks are located at phases lm_locs[0..L-1] and have index 0,...,L-1
+            lm_locs[i] = phase at which landmark i appears
+        - For the current phase, find the last landmark we have passed (if any).
+            - If no landmark seen yet, leave entry times null and zero landmark activity
+            - If some landmark k is the last seen
+                and it's the first time we enter its region (lm_entry_time was None) ==> record entry time.
+        - Compute amplitude as a Gaussian in time since entry.
+            - Need to compute the time distance (in step) from entry time to peak
+        - Generate a spatial Gaussian bump centered at that landmark (± small shift).
+
+        Returns
+        -------
+        landmark : np.ndarray of shape (K,)
+            Landmark input at this time step.
+        lm_entry_times : np.ndarray
+            Updated array of first-entry times for each landmark.
+        """
+        
+        L = lm_locs.shape[0]
+
+        # 1. at first, not passed through first landmark yet
+        landmark = np.zeros(self.network.K)
+
+        # 2. Given the current phase, find the last landmark we have passed
+        lm_idx = None
+        for i in range(L - 1, -1, -1):  # from landmark L-1 down to first index 0
+            if phase >= lm_locs[i]:
+                lm_idx = i
+                break
+
+        # 3. If the first lm location was not reached yet,
+        #   return zero landmark and unchanged lm_entry_times
+        if lm_idx is None:
+            return landmark, lm_entry_times
+        
+
+        # 4. if we are entering landmark k's region for the first time (lm_entry_time is still None)
+        #   update entry time and construct landmark
+        if lm_entry_times[lm_idx].isna():
+            lm_entry_times[lm_idx] = t
+        t_k = lm_entry_times[lm_idx]
+
+        # time passed since entry
+        time_passed = t-t_k
+        
+
+
+
+
+        
+        
+        # construct landmark input
+        amp = self.construct_lm_amplitude(t, t_k, landmark_onset_steps, landmark_tau_steps)
+
+        # Centers of the internal landmark bump (slightly shifted)
+        centers = lm_locs + 3.0
+
+        landmark = self.generate_landmark_input(
+            centers=centers,
+            std=5.0,
+            ampl_scaling=amp,
+            normalize_single=False,
+        )
+        return landmark
+    
+
+    def construct_lm_amplitude(self, t:int, t_k:int, landmark_onset_steps:int , landmark_tau_steps:int):
+        return 50.0 * np.exp(-(t - t_k - landmark_onset_steps) ** 2/ (2.0 * landmark_tau_steps**2))
 
