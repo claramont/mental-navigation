@@ -12,7 +12,7 @@ class CANNetwork:
         Number of neurons per ring (Right and Left populations each have N neurons).
         Total neurons = 2K.
     dt : float
-        Integration time step (seconds).
+        Integration time step (seconds) -> discretize time in steps so that each step lasts dt seconds
     tau_s : float
         Synaptic time constant (seconds).
     beta_0 : float
@@ -46,6 +46,7 @@ class CANNetwork:
         self.dt = dt
         self.tau_s = tau_s
         self.beta_vel = beta_vel
+        self.beta_0 = beta_0
 
         # Global feedforward excitation
         self.FF_global = self.beta_0 * np.ones(self.K, dtype= float)
