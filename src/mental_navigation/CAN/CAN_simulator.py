@@ -305,7 +305,7 @@ class CANSimulator:
             s[:, t] = prev + (F - prev) * net.dt / net.tau_s
 
             # tracking bump center and updating current state:
-            new_idx = self.new_local_max_idx(activity = s[:K, t], last_idx = nn_state[-1])
+            new_idx = self.next_peak_ahead(activity = s[:K, t], last_idx = nn_state[-1])
             nn_state.append(new_idx)
 
         # trim unused time steps
@@ -314,16 +314,54 @@ class CANSimulator:
         # return dict
         return {
             "s": s,
-            "nn_state": np.attay(nn_state, dtype=int),
+            "nn_state": np.array(nn_state, dtype=int),
             "v_base": v_base,
             "v_noise": v_noise,
-            "noisy_vel_input": v,
+            "vel_trace": v,
         }
     
+    
+
+    def next_peak_ahead(self,
+                        activity:np.ndarray,
+                        last_idx:int,
+                        window_ahead:int = 50,
+                        window_behind:int = 10,
+                        )-> int:
+        """
+        Track network phase by selecting the first local maximum ahead of last_idx
+        Given:
+            - last_idx: previous tracked peak index (network state)
+            - activity: the vector of shape (K,) representing the updated state of the bump
+        
+        - We construct a local window starting nearly at the last ring neuron index, and going ahead for 50 neurons.
+        - We find the index corresponding to the nearest peak in activity 
+        - We properly wrap around to have correct indexing from 0,...,K-1
+        """
+
+        K = activity.shape[0]
+        start_idx = last_idx - window_behind
+        window_idx = (np.arange(start_idx, last_idx + window_ahead + 1) % K).astype(int)
+        y = activity[window_idx]
+
+        local_peaks = []
+        for i in range(1, len(y) - 1):
+            if y[i] > y[i - 1] and y[i] > y[i + 1]:
+                local_peaks.append(i)
+
+        # if no local peak is found, fall back to max in window
+        if len(local_peaks) == 0:
+            peak_idx_window = int(np.argmax(y))
+        else:
+            # take the FIRST local peak ahead
+            peak_idx_window = local_peaks[0]
+
+        peak_idx_ring = int((start_idx + peak_idx_window) % K)
+        return peak_idx_ring
 
 
 
-    def new_local_max_idx(self, activity:np.ndarray, last_idx:int, window_radius:int=10)->int:
+    def new_local_max_idx(self, activity:np.ndarray, last_idx:int, window_radius:int=50)->int:
         """
         Given:
             - the index storing the last recorded position of the bump peak on the ring
