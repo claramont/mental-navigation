@@ -253,11 +253,16 @@ class CANSimulator:
         s[:, 0] = init_condition.copy()
 
         # initialize network state: now only phase on ring where the bump center starts
-        nn_state = [int(initial_phase)]
+        nn_state = [int(initial_phase) % K]
+        peak_idx = nn_state[0]
+        phase_unwrapped = [float(peak_idx)]
+        lm_amp_trace = [0.0]
+
 
         # construct noisy velocity input
         # will be constant over time through the trial
-        v_base, v_noise, v = self.init_velocity_input(landmarkpresent, wlm_speed, wolm_speed, wm)
+        v_base, v_noise= self.init_velocity_input(landmarkpresent, wlm_speed, wolm_speed, wm)
+        v = v_base + v_noise
 
         # landmark locations
         lm_locs = np.array(landmark_input_loc, dtype= float) # shape (L,)
@@ -269,7 +274,7 @@ class CANSimulator:
 
 
         t=0
-        while nn_state[-1] < end_phase and t < max_steps -1:
+        while phase_unwrapped[-1] < end_phase and t < max_steps -1:
             t += 1
 
             # Network dynamics
@@ -293,6 +298,9 @@ class CANSimulator:
             else:
                 landmark = np.zeros(K)
             
+            # track landmark 
+            lm_amp_trace.append(float(np.max(landmark)))
+
             # total input current
             G = self.pre_activation_current(v_L, v_R,
                                             g_RR, g_LL, g_RL, g_LR,
@@ -304,9 +312,17 @@ class CANSimulator:
             # state update
             s[:, t] = prev + (F - prev) * net.dt / net.tau_s
 
+            
             # tracking bump center and updating current state:
-            new_idx = self.next_peak_ahead(activity = s[:K, t], last_idx = nn_state[-1])
-            nn_state.append(new_idx)
+            new_peak_idx = self.next_peak_ahead(activity = s[:K, t], last_idx = peak_idx)
+            nn_state.append(new_peak_idx)
+
+            # unwrapped distance increment (forward steps along the ring)
+            delta = (new_peak_idx - peak_idx) % K
+            phase_unwrapped.append(phase_unwrapped[-1] + float(delta))
+
+            peak_idx = new_peak_idx     #update for new iteration
+
 
         # trim unused time steps
         s = s[:, : t+1]
@@ -315,9 +331,11 @@ class CANSimulator:
         return {
             "s": s,
             "nn_state": np.array(nn_state, dtype=int),
+            "phase_unw": np.array(phase_unwrapped, dtype=float),
+            "lm_amplitude": np.array(lm_amp_trace, dtype=float),
             "v_base": v_base,
             "v_noise": v_noise,
-            "vel_trace": v,
+            "v": v
         }
     
     
@@ -385,8 +403,7 @@ class CANSimulator:
     def init_velocity_input(self, landmarkpresent:bool, wlm_speed:float, wolm_speed:float, wm:float):
         v_base = wlm_speed if landmarkpresent else wolm_speed
         v_noise = v_base * wm * np.random.randn()
-        v = v_base + v_noise
-        return v_base, v_noise, v
+        return v_base, v_noise
         
 
 
