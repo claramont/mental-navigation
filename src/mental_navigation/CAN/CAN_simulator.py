@@ -318,8 +318,8 @@ class CANSimulator:
             nn_state.append(new_peak_idx)
 
             # unwrapped distance increment (forward steps along the ring)
-            raw_delta = (new_peak_idx - peak_idx) % K
-            delta = (raw_delta + K//2) % K - K//2
+            delta = new_peak_idx - peak_idx
+            #delta = (raw_delta + K//2) % K - K//2
             if delta < 0:
                 delta = 0
             phase_unwrapped.append(phase_unwrapped[-1] + float(delta))
@@ -352,13 +352,13 @@ class CANSimulator:
                         )-> int:
         """
         Track network phase by selecting the first local maximum ahead of last_idx
+        We search in a non-wrapping window clipped to [0, K-1]. Thhis avoids wrap-around glitches
         Given:
             - last_idx: previous tracked peak index (network state)
             - activity: the vector of shape (K,) representing the updated state of the bump
         
         - We construct a local window starting nearly at the last ring neuron index, and going ahead for 50 neurons.
         - We find the index corresponding to the nearest peak in activity 
-        - We properly wrap around to have correct indexing from 0,...,K-1
         """
 
         K = activity.shape[0]
@@ -374,14 +374,19 @@ class CANSimulator:
                 local_peaks.append(i)
 
         # if no local peak is found, fall back to max in window
-        if len(local_peaks) == 0:
+        if not local_peaks:
             peak_idx_window = int(np.argmax(y))
-        else:
-            # take the FIRST local peak ahead
-            peak_idx_window = local_peaks[0]
+        
+        # ring indices
+        candidates = [start_idx + i for i in local_peaks]
 
-        peak_idx_ring = int((start_idx + peak_idx_window) % K)
-        return peak_idx_ring
+        # prefer peaks >= last_idx
+        forward = [c for c in candidates if c >= last_idx]
+        if forward:
+            return int(forward[0])
+        else:
+            peak_idx_window = int(np.argmax(y))
+            return int(start_idx + peak_idx_window)
 
 
 
