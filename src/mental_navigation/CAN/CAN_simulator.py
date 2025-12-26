@@ -286,7 +286,7 @@ class CANSimulator:
 
             # internal landmark trigger (if present)
             if landmarkpresent:
-                current_phase = float(nn_state[-1])
+                current_phase = float(phase_unwrapped[-1])
                 landmark, lm_entry_times = self.create_landmark_trigger(t,
                                                                         current_phase,
                                                                         lm_locs,
