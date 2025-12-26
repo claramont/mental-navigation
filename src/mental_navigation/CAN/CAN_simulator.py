@@ -318,7 +318,10 @@ class CANSimulator:
             nn_state.append(new_peak_idx)
 
             # unwrapped distance increment (forward steps along the ring)
-            delta = (new_peak_idx - peak_idx) % K
+            raw_delta = (new_peak_idx - peak_idx) % K
+            delta = (raw_delta + K//2) % K - K//2
+            if delta < 0:
+                delta = 0
             phase_unwrapped.append(phase_unwrapped[-1] + float(delta))
 
             peak_idx = new_peak_idx     #update for new iteration
@@ -333,6 +336,7 @@ class CANSimulator:
             "nn_state": np.array(nn_state, dtype=int),
             "phase_unw": np.array(phase_unwrapped, dtype=float),
             "lm_amplitude": np.array(lm_amp_trace, dtype=float),
+            "lm_entry_times": lm_entry_times,
             "v_base": v_base,
             "v_noise": v_noise,
             "v": v
@@ -358,9 +362,11 @@ class CANSimulator:
         """
 
         K = activity.shape[0]
-        start_idx = last_idx - window_behind
-        window_idx = (np.arange(start_idx, last_idx + window_ahead + 1) % K).astype(int)
-        y = activity[window_idx]
+        start_idx = max(last_idx - window_behind, 0)
+        end_idx = min(last_idx + window_ahead, K-1)
+        y = activity[start_idx : end_idx+1]
+        #window_idx = (np.arange(start_idx, last_idx + window_ahead + 1) % K).astype(int)
+        #y = activity[window]
 
         local_peaks = []
         for i in range(1, len(y) - 1):
@@ -477,10 +483,10 @@ class CANSimulator:
         amp = strength * np.exp(-(dt_steps - landmark_onset_steps)**2 / (2.0 * landmark_tau_steps**2))
 
         # Centers of the internal landmark bump (slightly shifted)
-        center = (lm_locs[lm_idx] + landmark_shift) % K
+        centers = (lm_locs + landmark_shift) % K
 
         landmark = self.generate_landmark_input(
-            centers=[center],
+            centers=centers,
             std=spatial_std,
             ampl_scaling=amp,
             normalize_single=False,

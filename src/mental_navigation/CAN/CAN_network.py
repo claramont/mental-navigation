@@ -81,10 +81,17 @@ class CANNetwork:
 
         for i in range(self.K):
             # indexing 0, ..., K-1
-            W_RR[i, :] = np.roll(self.mexhat, i-1)
-            W_LL[i, :] = np.roll(self.mexhat, i+1)
-            W_RL[i, :] = np.roll(self.mexhat, i)
-            W_LR[i, :] = np.roll(self.mexhat, i)
+            
+            W_RR[i, :] = np.roll(self.mexhat, i)        
+            W_LL[i, :] = np.roll(self.mexhat, i + 2)
+            W_RL[i, :] = np.roll(self.mexhat, i + 1)
+            W_LR[i, :] = np.roll(self.mexhat, i + 1)
+
+            # earlier version
+            #W_RR[i, :] = np.roll(self.mexhat, i-1)
+            #W_LL[i, :] = np.roll(self.mexhat, i+1)
+            #W_RL[i, :] = np.roll(self.mexhat, i)
+            #W_LR[i, :] = np.roll(self.mexhat, i)
         
         return W_RR, W_LL, W_RL, W_LR
 
