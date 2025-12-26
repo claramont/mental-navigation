@@ -375,7 +375,7 @@ class CANSimulator:
 
         # if no local peak is found, fall back to max in window
         if not local_peaks:
-            peak_idx_window = int(np.argmax(y))
+            return int(start_idx + np.argmax(y))
         
         # ring indices
         candidates = [start_idx + i for i in local_peaks]
