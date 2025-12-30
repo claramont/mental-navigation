@@ -21,14 +21,13 @@ class CANSimulator:
         self.network = network
     
 
-    def generate_landmark_input(self,
-                                centers, 
-                                std:float,
-                                ampl_scaling:float,
-                                normalize_single:bool=False
+    def bump_for_initialization(self,
+                                lm_center, 
+                                lm_std:float,
+                                lm_gain:float
                                 )->np.ndarray:
         """
-        Produces Gaussian bump(s) across K ring neurons
+        Produces Gaussian bump(s) across K ring neurons and normalizes it
 
        Inputs:
         -----
@@ -42,33 +41,29 @@ class CANSimulator:
         - normalize_single: bool
             if True and L == 1, normalize max to 1 before scaling
         
-            
-        Returns:
-        -------
-        landmark_input: np.array of shape (K,)
-            The total landmark drive to each of the K neurons
-        
         """
         K = self.network.K
-        centers = np.atleast_1d(centers).astype(float)
-        L = centers.shape[0]
-
-        # row vector of L centers
-        centers_row = centers.reshape(1, L)    #(1,L)
+        x = np.arange(K, dtype=float)
+        lm = np.exp(-(x - lm_center) ** 2 / (2.0 * lm_std ** 2))
+        lm = (lm / lm.max()) * lm_gain
+        return lm # (K,)
         
-        # column vector of K indices (from 0 to K-1)
-        x_col = np.arange(0, K, dtype=float).reshape(K,1)     #(K,1)
+    
 
-        # For each neuron i and each landmark l:
-        #   gauss[i, l] = exp( - (i - center_l)^2 / (2 * std^2) )
-        #   gaussian_matr has shape (K, L)
-        gaussian_matr = np.exp(-(x_col-centers_row)**2 / (2.0 * std**2))
+    def gaussian_bumps(self,
+                       centers: np.ndarray,
+                       std : float,
+                       amp: float):
+        """
+        Sum of Gaussians over all centers (NO normalization).
+        centers in neuron index units (0..K-1 )
+        """
+        K = self.net.K
+        x = np.arange(K, dtype=float)[:, None]          # (K,1)
+        c = np.asarray(centers, dtype=float)[None, :]   # (1,L)
+        bumps = np.exp(-(x - c) ** 2 / (2.0 * std ** 2))  # (K,L)
+        return amp * bumps.sum(axis=1)                  # (K,)
 
-        if normalize_single and L==1:
-            gaussian_matr = gaussian_matr / gaussian_matr.max()
-        
-        landmark_input = ampl_scaling * gaussian_matr.sum(axis=1)   #(K,1)
-        return landmark_input
     
 
     # -----
@@ -130,12 +125,21 @@ class CANSimulator:
         net = self.network
         if landmark_input is None:
             landmark_input = np.zeros(net.K)
-        G_L = v_L * (g_LL + g_LR + net.FF_global) + landmark_input
-        G_R = v_R * (g_RL + g_RR + net.FF_global) + landmark_input
+        base_L = g_LL + g_LR + net.FF_global
+        base_R = g_RL + g_RR + net.FF_global
+
+        # dv = beta_vel * v_t -> recover from v_R-v_L
+        #dv = (v_R - v_L) * 0.5
+        #dv = np.clip(dv, -0.5, 0.5)
+        #G_L = base_L - dv * base_L + landmark_input
+        #G_R = base_R + dv * base_R + landmark_input
+
+        G_L = v_L * base_L + landmark_input
+        G_R = v_R * base_R + landmark_input
         return np.concatenate([G_L, G_R])
     
 
-
+    #--------------------------------------------------------------------------------------
 
     ### ---
     # Initialization 
@@ -161,14 +165,15 @@ class CANSimulator:
 
         # noisy speed input
         v_noise = weber_frac * np.random.randn()
-        v = (v_base + v_noise) * np.ones(n_steps) # scalar velocity input at time steps
+        v = (v_base + v_noise)  # scalar velocity input at time steps
+
+
 
         # Generate a soft static landmark bump (normalized and scaled)
-        landmark = self.generate_landmark_input(
-            centers=[landmark_center],
-            std=landmark_std,
-            ampl_scaling=landmark_contribution,
-            normalize_single=True,
+        landmark = self.bump_for_initialization(
+            lm_center=landmark_center,
+            lm_std=landmark_std,
+            lm_gain=landmark_contribution,
         ) #shape (K,)
 
         # Activity over time: 2 populations (L,R)-> total shape (2K,)
@@ -180,7 +185,7 @@ class CANSimulator:
             s_R = prev[K:]      # (K,)
 
             # Step 1. velocity gains
-            v_L, v_R = self.velocity_bias(v[t])     # scalars
+            v_L, v_R = self.velocity_bias(v)     # scalars
 
             # Step 2. recurrent synaptic contributions
             g_RR, g_LL, g_RL, g_LR = self.synaptic_inp_contrib(s_L, s_R)   # each (K,)
@@ -199,8 +204,63 @@ class CANSimulator:
         return activity[:, -1].copy()
 
 
+    #--------------------------------------------------------------------------------------
 
 
+    # Utils for trial
+
+
+
+    ### -------
+    #  Track peak and compute internal landmark
+    ### --------
+    def internal_landmark_input(
+        self,
+        t: int,
+        phase: float,
+        lm_locs: np.ndarray,
+        entry_times: np.ndarray,
+        onset_steps: int = 500,
+        tau_steps: int = 1500,
+        spatial_std: float = 5.0,
+        amp_peak: float = 50.0,
+        center_shift: float = 3.0,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        logic:
+        - before first lm -> 0
+        - once phase >= lm_locs[k], you start "event k" (until next lm boundary)
+        - amplitude is Gaussian in time since entry with peak at onset_steps
+        - injected pattern is a COMB at ALL (lm_locs + shift) centers
+        """
+        net = self.network
+        K = net.K
+        L = len(lm_locs)
+        lm_input = np.zeros(K, dtype=float)
+
+        if phase < lm_locs[0]:
+            return lm_input, entry_times
+
+        # which region are we in? k such that lm_locs[k] <= phase < lm_locs[k+1]
+        # same structure as the MATLAB if/elseif chain
+        k = int(np.searchsorted(lm_locs, phase, side="right") - 1)
+        k = max(0, min(k, L - 1))
+
+        if np.isnan(entry_times[k]):
+            entry_times[k] = t
+
+        dt_steps = t - int(entry_times[k])
+        amp = amp_peak * np.exp(-((dt_steps - onset_steps) ** 2) / (2.0 * tau_steps ** 2))
+
+        centers = lm_locs + center_shift  # MATLAB: landmark_centers = lm_locs + 3
+        lm_input = self.gaussian_bumps(centers=centers, std=spatial_std, amp=amp)
+        return lm_input, entry_times
+
+
+
+    ### ---
+    # Simulation of one trial after initialization 
+    ### ---
 
     def run_trial(self,
                   init_condition:np.ndarray,
@@ -248,33 +308,55 @@ class CANSimulator:
         K = net.K
         max_steps = int(T_max / net.dt)
 
+        # NEW LINES (TRY)
+        # --- Align init_condition so the bump peak is at initial_phase ---
+        #target = int(initial_phase) % K
+        #peak0 = int(np.argmax(init_condition[:K]))      
+        #shift = target - peak0                          # tru to roll the curve so peak0 -> target
+        #init_L = np.roll(init_condition[:K], shift)
+        #init_R = np.roll(init_condition[K:], shift)
+        #init_condition = np.concatenate([init_L, init_R])
+
         # states through the time steps of the simulation
         s = np.zeros((2*K, max_steps))
         s[:, 0] = init_condition.copy()
 
-        # initialize network state: now only phase on ring where the bump center starts
-        nn_state = [int(initial_phase) % K]
-        peak_idx = nn_state[0]
-        phase_unwrapped = [float(peak_idx)]
-        lm_amp_trace = [0.0]
+        nn_state = [int(initial_phase)]     # state seed
+        #peak_idx = 0
+        #lm_amp_trace = [0]
+
+        # #initialize network state: now only phase on ring where the bump center starts
+        #nn_state = [int(initial_phase)]
+        #peak_idx = nn_state[0]
+        #phase_unwrapped = [float(peak_idx)]
+        #lm_amp_trace = [0.0]
+
+        # this followed the NEW LINES
+        #nn_state = [target]
+        #peak_idx = target
+        #phase_unwrapped = [float(target)]
+        #lm_amp_trace = [0.0]
 
 
         # construct noisy velocity input
         # will be constant over time through the trial
-        v_base, v_noise= self.init_velocity_input(landmarkpresent, wlm_speed, wolm_speed, wm)
-        v = v_base + v_noise
+        v_base = wlm_speed if landmarkpresent else wolm_speed
+        v_noise = v_base * wm * np.random.randn()
+        v = float(v_base + v_noise)
 
         # landmark locations
-        lm_locs = np.array(landmark_input_loc, dtype= float) # shape (L,)
-        L = lm_locs.shape[0]
+        lm_locs = np.asarray(landmark_input_loc, dtype= float) # shape (L,)
+        L = len(lm_locs)
 
         # initialize lm_entry times as an array of null values
         lm_entry_times = np.full(L, np.nan) # entry times for each landmark
+        lm_amp_trace = [0.0]
         
 
 
         t=0
-        while phase_unwrapped[-1] < end_phase and t < max_steps -1:
+        #while phase_unwrapped[-1] < end_phase and t < max_steps -1: # PREVIOUS
+        while nn_state[-1] < end_phase and t < max_steps -1:
             t += 1
 
             # Network dynamics
@@ -286,25 +368,26 @@ class CANSimulator:
 
             # internal landmark trigger (if present)
             if landmarkpresent:
-                current_phase = float(phase_unwrapped[-1])
-                landmark, lm_entry_times = self.create_landmark_trigger(t,
-                                                                        current_phase,
-                                                                        lm_locs,
-                                                                        lm_entry_times,
-                                                                        landmark_onset_steps,
-                                                                        landmark_tau_steps,
-                                                                        landmark_shift)
-
+                #current_phase = float(phase_unwrapped[-1])
+                lm_input, lm_entry_times = self.internal_landmark_input(t= t,
+                                                                        phase = float(nn_state[-1]),
+                                                                        lm_locs = lm_locs,
+                                                                        entry_times = lm_entry_times,
+                                                                        onset_steps = landmark_onset_steps,
+                                                                        tau_steps = landmark_tau_steps,
+                                                                        center_shift = landmark_shift
+                                                                        )
             else:
-                landmark = np.zeros(K)
+                lm_input = np.zeros(K)
             
             # track landmark 
-            lm_amp_trace.append(float(np.max(landmark)))
+            lm_amp_trace.append(float(np.max(lm_input)))
 
             # total input current
             G = self.pre_activation_current(v_L, v_R,
                                             g_RR, g_LL, g_RL, g_LR,
-                                            landmark_input = landmark)
+                                            landmark_input = lm_input
+                                            )
 
             # relu
             F = np.maximum(G, 0.0)
@@ -313,18 +396,44 @@ class CANSimulator:
             s[:, t] = prev + (F - prev) * net.dt / net.tau_s
 
             
-            # tracking bump center and updating current state:
-            new_peak_idx = self.next_peak_ahead(activity = s[:K, t], last_idx = peak_idx)
-            nn_state.append(new_peak_idx)
+            # attempt 1:
+            # !!!! tracking bump center and updating current state:
+            #new_peak_idx = self.next_peak_ahead(activity = s[:K, t], last_idx = peak_idx)
+            #nn_state.append(new_peak_idx)
+
+            # attempt 2:
+            # !!!! try with lOCAL MAX (not next peak ahead)
+            #new_peak_idx = self.new_local_max_idx(activity = s[:K, t], last_idx = peak_idx)
+            #delta = (new_peak_idx - peak_idx) % K
+            #if delta > 12:
+            #   delta = 0
+            #phase_unwrapped.append(phase_unwrapped[-1] + float(delta))
+
+            # attempt 3:
+            z = s[:K, t] # left pop
+            new_idx = self.first_local_peak_in_tail(z, last_idx=nn_state[-1], behind=10)
+            if new_idx < nn_state[-1]:
+                new_idx = nn_state[-1]
+            
+            nn_state.append(int(new_idx))
+
+
 
             # unwrapped distance increment (forward steps along the ring)
-            delta = new_peak_idx - peak_idx
+            #delta = new_peak_idx - peak_idx
             #delta = (raw_delta + K//2) % K - K//2
-            if delta < 0:
-                delta = 0
-            phase_unwrapped.append(phase_unwrapped[-1] + float(delta))
+            #if delta < 0:
+            #   delta = 0
 
-            peak_idx = new_peak_idx     #update for new iteration
+            
+            #d = new_peak_idx - peak_idx
+            #if d<0:
+            #    d=0
+            #    new_peak_idx = peak_idx
+            #phase_unwrapped.append(phase_unwrapped[-1] + float(d))
+            #nn_state.append(new_peak_idx)
+            #peak_idx = new_peak_idx     #update for new iteration
+            
 
 
         # trim unused time steps
@@ -333,16 +442,41 @@ class CANSimulator:
         # return dict
         return {
             "s": s,
-            "nn_state": np.array(nn_state, dtype=int),
-            "phase_unw": np.array(phase_unwrapped, dtype=float),
+            "nn_state": np.asarray(nn_state, dtype=int),
+            #"phase_unw": np.array(phase_unwrapped, dtype=float),
             "lm_amplitude": np.array(lm_amp_trace, dtype=float),
             "lm_entry_times": lm_entry_times,
             "v_base": v_base,
             "v_noise": v_noise,
-            "v": v
+            "v": float(v)
         }
     
     
+    
+
+    def first_local_peak_in_tail(z: np.ndarray, last_idx: int, behind: int = 10) -> int:
+        """
+        
+          nn_state = TF(1) + nn_state(end) - 11;
+
+        Tail window from (last_idx - behind) to end, no wrap. Take FIRST local peak.
+        """
+        K = len(z)
+        start = max(last_idx - behind, 0)
+        y = z[start:]  # tail to end
+
+        peaks = []
+        for i in range(1, len(y) - 1):
+            if y[i] > y[i - 1] and y[i] > y[i + 1]:
+                peaks.append(i)
+
+        if not peaks:
+            return start + int(np.argmax(y))
+
+        return start + int(peaks[0])
+
+
+
 
     def next_peak_ahead(self,
                         activity:np.ndarray,
@@ -390,7 +524,7 @@ class CANSimulator:
 
 
 
-    def new_local_max_idx(self, activity:np.ndarray, last_idx:int, window_radius:int=50)->int:
+    def new_local_max_idx(self, activity:np.ndarray, last_idx:int, window_radius:int=12)->int:
         """
         Given:
             - the index storing the last recorded position of the bump peak on the ring
@@ -410,13 +544,7 @@ class CANSimulator:
         return idx_max_ring
 
 
-
-    def init_velocity_input(self, landmarkpresent:bool, wlm_speed:float, wolm_speed:float, wm:float):
-        v_base = wlm_speed if landmarkpresent else wolm_speed
-        v_noise = v_base * wm * np.random.randn()
-        return v_base, v_noise
         
-
 
     def create_landmark_trigger(
             self,
@@ -487,8 +615,10 @@ class CANSimulator:
         dt_steps = t-t_k
         amp = strength * np.exp(-(dt_steps - landmark_onset_steps)**2 / (2.0 * landmark_tau_steps**2))
 
-        # Centers of the internal landmark bump (slightly shifted)
-        centers = (lm_locs + landmark_shift) % K
+
+        ### version 1 -- inject bumps at all landmark locations
+        ## Centers of the internal landmark bump (slightly shifted)
+        centers = lm_locs + landmark_shift
 
         landmark = self.generate_landmark_input(
             centers=centers,
@@ -497,4 +627,14 @@ class CANSimulator:
             normalize_single=False,
         )
         return landmark, lm_entry_times
+
+        ### version 2 -- inject bump only at the center of the current bump location
+        #center = float(lm_locs[lm_idx] + landmark_shift) % K
+        #landmark = self.generate_landmark_input(
+        #    centers = [center],
+        #    std = spatial_std,
+        #    ampl_scaling = amp,
+        #    normalize_single= True
+        #)
+        #return landmark, lm_entry_times
     

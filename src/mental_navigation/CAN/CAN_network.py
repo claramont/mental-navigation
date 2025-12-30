@@ -40,6 +40,7 @@ class CANNetwork:
         tau_s: float = 40.0 / 1000.0, #(40 ms)
         beta_vel: float = 1.0, 
         beta_0: float = 100.0,
+        syn_shift : int = 1.0
         ):
 
         self.K = K
@@ -47,6 +48,7 @@ class CANNetwork:
         self.tau_s = tau_s
         self.beta_vel = beta_vel
         self.beta_0 = beta_0
+        self.syn_shift = syn_shift
 
         # Global feedforward excitation
         self.FF_global = self.beta_0 * np.ones(self.K, dtype= float)
@@ -79,17 +81,20 @@ class CANNetwork:
         W_RL = np.zeros((self.K, self.K), dtype=float)
         W_LR = np.zeros((self.K, self.K), dtype=float)
 
+        sh = int(self.syn_shift)
         for i in range(self.K):
             # indexing 0, ..., K-1
             
-            W_RR[i, :] = np.roll(self.mexhat, i)        
+
+            # !!! this alone makes flat plateaus
+            W_RR[i, :] = np.roll(self.mexhat, i )        
             W_LL[i, :] = np.roll(self.mexhat, i + 2)
             W_RL[i, :] = np.roll(self.mexhat, i + 1)
             W_LR[i, :] = np.roll(self.mexhat, i + 1)
 
-            # earlier version
-            #W_RR[i, :] = np.roll(self.mexhat, i-1)
-            #W_LL[i, :] = np.roll(self.mexhat, i+1)
+            # (matlab-like) earlier version -> here drift is slowing, not stopped
+            #W_RR[i, :] = np.roll(self.mexhat, i-sh)
+            #W_LL[i, :] = np.roll(self.mexhat, i+sh)
             #W_RL[i, :] = np.roll(self.mexhat, i)
             #W_LR[i, :] = np.roll(self.mexhat, i)
         
