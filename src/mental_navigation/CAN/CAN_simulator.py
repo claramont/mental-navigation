@@ -58,7 +58,7 @@ class CANSimulator:
         Sum of Gaussians over all centers (NO normalization).
         centers in neuron index units (0..K-1 )
         """
-        K = self.net.K
+        K = self.network.K
         x = np.arange(K, dtype=float)[:, None]          # (K,1)
         c = np.asarray(centers, dtype=float)[None, :]   # (1,L)
         bumps = np.exp(-(x - c) ** 2 / (2.0 * std ** 2))  # (K,L)
@@ -233,8 +233,7 @@ class CANSimulator:
         - amplitude is Gaussian in time since entry with peak at onset_steps
         - injected pattern is a COMB at ALL (lm_locs + shift) centers
         """
-        net = self.network
-        K = net.K
+        K = self.network.K
         L = len(lm_locs)
         lm_input = np.zeros(K, dtype=float)
 
@@ -252,7 +251,7 @@ class CANSimulator:
         dt_steps = t - int(entry_times[k])
         amp = amp_peak * np.exp(-((dt_steps - onset_steps) ** 2) / (2.0 * tau_steps ** 2))
 
-        centers = lm_locs + center_shift  # MATLAB: landmark_centers = lm_locs + 3
+        centers = (lm_locs + center_shift).astype(float)  # MATLAB: landmark_centers = lm_locs + 3
         lm_input = self.gaussian_bumps(centers=centers, std=spatial_std, amp=amp)
         return lm_input, entry_times
 
@@ -274,7 +273,8 @@ class CANSimulator:
                   T_max: float =60.0,
                   landmark_onset_steps: int =500,
                   landmark_tau_steps: int =1500,
-                  landmark_shift: float = 3.0):
+                  landmark_shift: float = 3.0,
+                  align_input_bump : bool = False):
         """
         Run one CAN trial with or without internal landmarks.
 
@@ -309,6 +309,12 @@ class CANSimulator:
         max_steps = int(T_max / net.dt)
 
         # NEW LINES (TRY)
+        if align_input_bump:
+            peak0 = int(np.argmax(init_condition[:K]))
+            shift = int(initial_phase) - peak0
+            init_condition[:K] = np.roll(init_condition[:K], shift)
+            init_condition[K:] = np.roll(init_condition[K:], shift)
+
         # --- Align init_condition so the bump peak is at initial_phase ---
         #target = int(initial_phase) % K
         #peak0 = int(np.argmax(init_condition[:K]))      
@@ -411,7 +417,7 @@ class CANSimulator:
 
             # attempt 3:
             z = s[:K, t] # left pop
-            new_idx = self.first_local_peak_in_tail(z, last_idx=nn_state[-1], behind=10)
+            new_idx = self.first_local_peak_in_tail(z= z, last_idx=nn_state[-1], behind=10)
             if new_idx < nn_state[-1]:
                 new_idx = nn_state[-1]
             
@@ -448,20 +454,20 @@ class CANSimulator:
             "lm_entry_times": lm_entry_times,
             "v_base": v_base,
             "v_noise": v_noise,
-            "v": float(v)
+            "v": float(v),
+            "T": len(nn_state) * net.dt
         }
     
     
     
 
-    def first_local_peak_in_tail(z: np.ndarray, last_idx: int, behind: int = 10) -> int:
+    def first_local_peak_in_tail(self, z: np.ndarray, last_idx: int, behind: int = 10) -> int:
         """
         
           nn_state = TF(1) + nn_state(end) - 11;
 
         Tail window from (last_idx - behind) to end, no wrap. Take FIRST local peak.
         """
-        K = len(z)
         start = max(last_idx - behind, 0)
         y = z[start:]  # tail to end
 
