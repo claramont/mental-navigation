@@ -13,7 +13,8 @@ dependencies = [
     "ipykernel (>=7.1.0,<8.0.0)",
     "matplotlib (>=3.10.7,<4.0.0)",
     "scikit-learn (>=1.7.2,<2.0.0)",
-    "openpyxl (>=3.1.5,<4.0.0)"
+    "openpyxl (>=3.1.5,<4.0.0)",
+    "scipy (>=1.16.3,<2.0.0)"
 ]
 
 [tool.poetry]
