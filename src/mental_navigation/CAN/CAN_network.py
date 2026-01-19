@@ -91,12 +91,6 @@ class CANNetwork:
             W_LL[i, :] = np.roll(self.mexhat, i + 2)
             W_RL[i, :] = np.roll(self.mexhat, i + 1)
             W_LR[i, :] = np.roll(self.mexhat, i + 1)
-
-            # (matlab-like) earlier version -> here drift is slowing, not stopped
-            #W_RR[i, :] = np.roll(self.mexhat, i-sh)
-            #W_LL[i, :] = np.roll(self.mexhat, i+sh)
-            #W_RL[i, :] = np.roll(self.mexhat, i)
-            #W_LR[i, :] = np.roll(self.mexhat, i)
         
         return W_RR, W_LL, W_RL, W_LR
 

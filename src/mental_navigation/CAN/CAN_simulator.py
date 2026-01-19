@@ -128,12 +128,6 @@ class CANSimulator:
         base_L = g_LL + g_LR + net.FF_global
         base_R = g_RL + g_RR + net.FF_global
 
-        # dv = beta_vel * v_t -> recover from v_R-v_L
-        #dv = (v_R - v_L) * 0.5
-        #dv = np.clip(dv, -0.5, 0.5)
-        #G_L = base_L - dv * base_L + landmark_input
-        #G_R = base_R + dv * base_R + landmark_input
-
         G_L = v_L * base_L + landmark_input
         G_R = v_R * base_R + landmark_input
         return np.concatenate([G_L, G_R])
@@ -241,7 +235,6 @@ class CANSimulator:
             return lm_input, entry_times
 
         # which region are we in? k such that lm_locs[k] <= phase < lm_locs[k+1]
-        # same structure as the MATLAB if/elseif chain
         k = int(np.searchsorted(lm_locs, phase, side="right") - 1)
         k = max(0, min(k, L - 1))
 
@@ -315,34 +308,12 @@ class CANSimulator:
             init_condition[:K] = np.roll(init_condition[:K], shift)
             init_condition[K:] = np.roll(init_condition[K:], shift)
 
-        # --- Align init_condition so the bump peak is at initial_phase ---
-        #target = int(initial_phase) % K
-        #peak0 = int(np.argmax(init_condition[:K]))      
-        #shift = target - peak0                          # tru to roll the curve so peak0 -> target
-        #init_L = np.roll(init_condition[:K], shift)
-        #init_R = np.roll(init_condition[K:], shift)
-        #init_condition = np.concatenate([init_L, init_R])
 
         # states through the time steps of the simulation
         s = np.zeros((2*K, max_steps))
         s[:, 0] = init_condition.copy()
 
         nn_state = [int(initial_phase)]     # state seed
-        #peak_idx = 0
-        #lm_amp_trace = [0]
-
-        # #initialize network state: now only phase on ring where the bump center starts
-        #nn_state = [int(initial_phase)]
-        #peak_idx = nn_state[0]
-        #phase_unwrapped = [float(peak_idx)]
-        #lm_amp_trace = [0.0]
-
-        # this followed the NEW LINES
-        #nn_state = [target]
-        #peak_idx = target
-        #phase_unwrapped = [float(target)]
-        #lm_amp_trace = [0.0]
-
 
         # construct noisy velocity input
         # will be constant over time through the trial
@@ -401,45 +372,13 @@ class CANSimulator:
             # state update
             s[:, t] = prev + (F - prev) * net.dt / net.tau_s
 
-            
-            # attempt 1:
-            # !!!! tracking bump center and updating current state:
-            #new_peak_idx = self.next_peak_ahead(activity = s[:K, t], last_idx = peak_idx)
-            #nn_state.append(new_peak_idx)
-
-            # attempt 2:
-            # !!!! try with lOCAL MAX (not next peak ahead)
-            #new_peak_idx = self.new_local_max_idx(activity = s[:K, t], last_idx = peak_idx)
-            #delta = (new_peak_idx - peak_idx) % K
-            #if delta > 12:
-            #   delta = 0
-            #phase_unwrapped.append(phase_unwrapped[-1] + float(delta))
-
-            # attempt 3:
+            #
             z = s[:K, t] # left pop
             new_idx = self.first_local_peak_in_tail(z= z, last_idx=nn_state[-1], behind=10)
             if new_idx < nn_state[-1]:
                 new_idx = nn_state[-1]
             
             nn_state.append(int(new_idx))
-
-
-
-            # unwrapped distance increment (forward steps along the ring)
-            #delta = new_peak_idx - peak_idx
-            #delta = (raw_delta + K//2) % K - K//2
-            #if delta < 0:
-            #   delta = 0
-
-            
-            #d = new_peak_idx - peak_idx
-            #if d<0:
-            #    d=0
-            #    new_peak_idx = peak_idx
-            #phase_unwrapped.append(phase_unwrapped[-1] + float(d))
-            #nn_state.append(new_peak_idx)
-            #peak_idx = new_peak_idx     #update for new iteration
-            
 
 
         # trim unused time steps
@@ -449,7 +388,6 @@ class CANSimulator:
         return {
             "s": s,
             "nn_state": np.asarray(nn_state, dtype=int),
-            #"phase_unw": np.array(phase_unwrapped, dtype=float),
             "lm_amplitude": np.array(lm_amp_trace, dtype=float),
             "lm_entry_times": lm_entry_times,
             "v_base": v_base,
@@ -505,8 +443,6 @@ class CANSimulator:
         start_idx = max(last_idx - window_behind, 0)
         end_idx = min(last_idx + window_ahead, K-1)
         y = activity[start_idx : end_idx+1]
-        #window_idx = (np.arange(start_idx, last_idx + window_ahead + 1) % K).astype(int)
-        #y = activity[window]
 
         local_peaks = []
         for i in range(1, len(y) - 1):
@@ -634,13 +570,4 @@ class CANSimulator:
         )
         return landmark, lm_entry_times
 
-        ### version 2 -- inject bump only at the center of the current bump location
-        #center = float(lm_locs[lm_idx] + landmark_shift) % K
-        #landmark = self.generate_landmark_input(
-        #    centers = [center],
-        #    std = spatial_std,
-        #    ampl_scaling = amp,
-        #    normalize_single= True
-        #)
-        #return landmark, lm_entry_times
     
